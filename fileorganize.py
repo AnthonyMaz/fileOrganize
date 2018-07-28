@@ -14,6 +14,7 @@ SYMLINK = (6, 'symbolic link')
 BROKEN_SYMLINK = (7, 'broken symbolic link')
 SOCKET = (8, 'socket')
 UNKNOWN = (9, 'unknown')
+ERROR = (10, 'unknown error')
 
 
 def md5sum(src, length=io.DEFAULT_BUFFER_SIZE):
@@ -52,13 +53,13 @@ def md5sum(src, length=io.DEFAULT_BUFFER_SIZE):
             cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
                 (src, None, BROKEN_SYMLINK[0]))
 
-    print(src)
     if not S_ISREG(mode):
         return md5
     else:
         size = os.path.getsize(src)
 
     if size > 10 * 1024 * 1024:
+        print(src)
         pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=size).start()
         pbar.start()
         with io.open(src, mode="rb") as fd:
@@ -68,9 +69,12 @@ def md5sum(src, length=io.DEFAULT_BUFFER_SIZE):
                 pbar.update(calculated)
         print('')
     else:
-        with io.open(src, mode="rb") as fd:
-            for chunk in iter(lambda: fd.read(length), b''):
-                md5.update(chunk)
+        try:
+            with io.open(src, mode="rb") as fd:
+                for chunk in iter(lambda: fd.read(length), b''):
+                    md5.update(chunk)
+        except OSError:
+            pass
     return md5
 
 
@@ -94,6 +98,7 @@ if not cur.fetchone():
     cur.execute("INSERT INTO 'file_inode_stats' VALUES (?, ?)", (SYMLINK[0], SYMLINK[1]))
     cur.execute("INSERT INTO 'file_inode_stats' VALUES (?, ?)", (BROKEN_SYMLINK[0], BROKEN_SYMLINK[1]))
     cur.execute("INSERT INTO 'file_inode_stats' VALUES (?, ?)", (SOCKET[0], SOCKET[1]))
+    cur.execute("INSERT INTO 'file_inode_stats' VALUES (?, ?)", (ERROR[0], ERROR[1]))
 
 
 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_metadata'")
@@ -112,19 +117,18 @@ if not cur.fetchone():
 scan_dir = os.path.abspath('.')
 print('Collecting MD5 sums for files in %s' % scan_dir)
 
-count=0
-for dir_name, subdir_list, files in os.walk(scan_dir, followlinks=False):
-    for directory_name in subdir_list:
-        directory_name = os.path.join(dir_name, directory_name)
+exclude = {'dev', 'run', 'sys', 'proc', 'btrfs', 'tmp'}
+
+for root, dirs, files in os.walk(scan_dir, followlinks=False, topdown=True):
+    dirs[:] = [d for d in dirs if d not in exclude]
+    for directory_name in dirs:
+        directory_name = os.path.join(root, directory_name)
         file_hash = md5sum(directory_name).hexdigest()
         cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (directory_name, file_hash))
-        count+=1
     for file_name in files:
-        file_name = os.path.join(dir_name, file_name)
+        file_name = os.path.join(root, file_name)
         file_hash = md5sum(file_name).hexdigest()
         cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (file_name, file_hash))
-        count+=1
-
 
 
 conn.commit()
