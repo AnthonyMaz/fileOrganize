@@ -8,7 +8,7 @@ cd fileOrganize
 git checkout python
 virtualenv venv
 source venv/bin/activate
-pip install -r requirements.txt
+make
 ```
 
 ## Running it

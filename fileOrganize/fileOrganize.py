@@ -1,13 +1,14 @@
 import hashlib
 import io
-import os
 import magic
+import os
+
 from blessings import Terminal
 from progressive.bar import Bar
 from stat import S_ISCHR, S_ISBLK, S_ISFIFO, S_ISLNK, S_ISDIR, S_ISREG, S_ISSOCK
 from progressive.tree import Value, BarDescriptor, ProgressTree
-from db import upsert_file_metadata, stat_types, upsert_md5_hash, init_database, commit
 
+from fileOrganize.db import upsert_file_metadata, init_database, stat_types, upsert_md5_hash, commit
 try:
     RUNNING_IN_PYCHARM = os.environ['RUNNING_IN_PYCHARM']
 except KeyError:
@@ -124,3 +125,4 @@ while not are_we_done():
 
 
 commit()
+
