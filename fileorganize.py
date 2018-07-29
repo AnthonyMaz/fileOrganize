@@ -2,9 +2,19 @@ import hashlib
 import io
 import os
 import sqlite3
+
 import magic
-from progressbar import Bar, Percentage, ProgressBar
+from blessings import Terminal
+from progressive.bar import Bar
 from stat import S_ISCHR, S_ISBLK, S_ISFIFO, S_ISLNK, S_ISDIR, S_ISREG, S_ISSOCK
+
+from progressive.tree import Value, BarDescriptor, ProgressTree
+
+try:
+    RUNNING_IN_PYCHARM = os.environ['RUNNING_IN_PYCHARM']
+except KeyError:
+    RUNNING_IN_PYCHARM = False
+
 
 DIRECTORY = (1, 'directory')
 CHAR = (2, 'character special device file')
@@ -19,7 +29,6 @@ ERROR = (10, 'unknown error')
 
 
 def analyze(src, length=io.DEFAULT_BUFFER_SIZE):
-    calculated = 0
     md5 = hashlib.md5()
     src = os.path.abspath(src)
     try:
@@ -60,22 +69,9 @@ def analyze(src, length=io.DEFAULT_BUFFER_SIZE):
     try:
         cur.execute('UPDATE file_metadata SET mime_type = ?, mime_detail = ? WHERE file_name = ?',
                     (magic.from_file(src, mime=True), magic.from_file(src), src))
-        print(src)
-        size = os.path.getsize(src)
-        if size > 10 * 1024 * 1024:
-            print(src)
-            pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=size).start()
-            pbar.start()
-            with io.open(src, mode="rb") as fd:
-                for chunk in iter(lambda: fd.read(length), b''):
-                    md5.update(chunk)
-                    calculated += len(chunk)
-                    pbar.update(calculated)
-            print('')
-        else:
-            with io.open(src, mode="rb") as fd:
-                for chunk in iter(lambda: fd.read(length), b''):
-                    md5.update(chunk)
+        with io.open(src, mode="rb") as fd:
+            for chunk in iter(lambda: fd.read(length), b''):
+                md5.update(chunk)
     except OSError:
         cur.execute('UPDATE file_metadata set stat_type = ? WHERE file_name = ?',
                     (ERROR[0], src))
@@ -119,20 +115,61 @@ if not cur.fetchone():
 
 
 scan_dir = os.path.abspath('.')
-print('Collecting Metadata for files in %s' % scan_dir)
+print('Finding files to process in %s' % scan_dir)
 
 exclude = {'dev', 'run', 'sys', 'proc', 'btrfs', 'tmp'}
 
+
+dir_count = 0
+dirs_analyzed = 0
+file_count = 0
+files_analyzed = 0
+
 for root, dirs, files in os.walk(scan_dir, followlinks=False, topdown=True):
     dirs[:] = [d for d in dirs if d not in exclude]
-    for directory_name in dirs:
-        directory_name = os.path.join(root, directory_name)
-        file_hash = analyze(directory_name).hexdigest()
-        cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (directory_name, file_hash))
-    for file_name in files:
-        file_name = os.path.join(root, file_name)
-        file_hash = analyze(file_name).hexdigest()
-        cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (file_name, file_hash))
+    dir_count += len(dirs)
+    file_count += len(files)
 
+leaf_values = [Value(0) for i in range(2)]
+bd_directories = dict(type=Bar, kwargs=dict(max_value=dir_count, width='50%'))
+bd_files = dict(type=Bar, kwargs=dict(max_value=file_count, width='50%'))
+bd_defaults = dict(type=Bar, kwargs=dict(max_value=100, width='50%', num_rep='percentage'))
+
+
+test_d = {
+    'Analyze files in %s' % scan_dir: {
+        "Directories": BarDescriptor(value=leaf_values[0], **bd_directories),
+        "Files": BarDescriptor(value=leaf_values[1], **bd_files)
+    }
+}
+
+t = Terminal()
+n = ProgressTree(term=t)
+n.make_room(test_d)
+
+
+def are_we_done():
+    return files_analyzed == file_count
+
+while not are_we_done():
+    for root, dirs, files in os.walk(scan_dir, followlinks=False, topdown=True):
+        dirs[:] = [d for d in dirs if d not in exclude]
+        for directory_name in dirs:
+            directory_name = os.path.join(root, directory_name)
+            file_hash = analyze(directory_name).hexdigest()
+            cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (directory_name, file_hash))
+            dirs_analyzed += 1
+            leaf_values[0].value = dirs_analyzed
+
+
+        for file_name in files:
+            file_name = os.path.join(root, file_name)
+            file_hash = analyze(file_name).hexdigest()
+            cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (file_name, file_hash))
+            files_analyzed += 1
+            leaf_values[1].value = files_analyzed
+            if not RUNNING_IN_PYCHARM:
+                n.cursor.restore()
+                n.draw(test_d, BarDescriptor(bd_defaults))
 
 conn.commit()
