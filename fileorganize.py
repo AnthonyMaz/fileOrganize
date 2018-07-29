@@ -43,8 +43,8 @@ def analyze(src, length=io.DEFAULT_BUFFER_SIZE):
             cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
                         (src, BLOCK[0]))
         elif S_ISREG(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, stat_type) VALUES (?, ?, ?)',
-                        (src, os.path.getsize(src), REGULAR[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, extension, stat_type) VALUES (?, ?, ?, ?)',
+                        (src, os.path.getsize(src), os.path.splitext(src)[1], REGULAR[0]))
         elif S_ISFIFO(mode):
             cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
                         (src, FIFO[0]))
@@ -104,7 +104,7 @@ if not cur.fetchone():
 
 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_metadata'")
 if not cur.fetchone():
-    cur.execute('CREATE TABLE file_metadata (file_name TEXT PRIMARY KEY, size INTEGER, mime_type TEXT, mime_detail TEXT, stat_type INTEGER)')
+    cur.execute('CREATE TABLE file_metadata (file_name TEXT PRIMARY KEY, extension TEXT, size INTEGER, mime_type TEXT, mime_detail TEXT, stat_type INTEGER)')
 
 
 # Create the hashes table if it doesn't exist already
