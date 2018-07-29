@@ -2,6 +2,7 @@ import hashlib
 import io
 import os
 import sqlite3
+import magic
 from progressbar import Bar, Percentage, ProgressBar
 from stat import S_ISCHR, S_ISBLK, S_ISFIFO, S_ISLNK, S_ISDIR, S_ISREG, S_ISSOCK
 
@@ -17,64 +18,68 @@ UNKNOWN = (9, 'unknown')
 ERROR = (10, 'unknown error')
 
 
-def md5sum(src, length=io.DEFAULT_BUFFER_SIZE):
+def analyze(src, length=io.DEFAULT_BUFFER_SIZE):
     calculated = 0
     md5 = hashlib.md5()
     src = os.path.abspath(src)
     try:
         mode = os.stat(src).st_mode
         if S_ISDIR(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                        (src, None, DIRECTORY[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                        (src, DIRECTORY[0]))
         elif S_ISCHR(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                        (src, None, CHAR[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                        (src, CHAR[0]))
         elif S_ISBLK(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                        (src, None, BLOCK[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                        (src, BLOCK[0]))
         elif S_ISREG(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, stat_type) VALUES (?, ?, ?)',
                         (src, os.path.getsize(src), REGULAR[0]))
         elif S_ISFIFO(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                        (src, None, FIFO[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                        (src, FIFO[0]))
         elif S_ISLNK(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, stat_type) VALUES (?, ?)',
                         (src, os.path.getsize(src), SYMLINK[0]))
         elif S_ISSOCK(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                        (src, None, SOCKET[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                        (src, SOCKET[0]))
         else:
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
                 (src, None, UNKNOWN[0]))
     except FileNotFoundError:
         mode = os.stat(src, follow_symlinks=False).st_mode
         if S_ISLNK(mode):
-            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, size, type) VALUES (?, ?, ?)',
-                (src, None, BROKEN_SYMLINK[0]))
+            cur.execute('INSERT OR REPLACE INTO file_metadata (file_name, stat_type) VALUES (?, ?)',
+                (src, BROKEN_SYMLINK[0]))
 
     if not S_ISREG(mode):
         return md5
-    else:
-        size = os.path.getsize(src)
 
-    if size > 10 * 1024 * 1024:
+    try:
+        cur.execute('UPDATE file_metadata SET mime_type = ?, mime_detail = ? WHERE file_name = ?',
+                    (magic.from_file(src, mime=True), magic.from_file(src), src))
         print(src)
-        pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=size).start()
-        pbar.start()
-        with io.open(src, mode="rb") as fd:
-            for chunk in iter(lambda: fd.read(length), b''):
-                md5.update(chunk)
-                calculated += len(chunk)
-                pbar.update(calculated)
-        print('')
-    else:
-        try:
+        size = os.path.getsize(src)
+        if size > 10 * 1024 * 1024:
+            print(src)
+            pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=size).start()
+            pbar.start()
             with io.open(src, mode="rb") as fd:
                 for chunk in iter(lambda: fd.read(length), b''):
                     md5.update(chunk)
-        except OSError:
-            pass
+                    calculated += len(chunk)
+                    pbar.update(calculated)
+            print('')
+        else:
+            with io.open(src, mode="rb") as fd:
+                for chunk in iter(lambda: fd.read(length), b''):
+                    md5.update(chunk)
+    except OSError:
+        cur.execute('UPDATE file_metadata set stat_type = ? WHERE file_name = ?',
+                    (ERROR[0], src))
+        pass
     return md5
 
 
@@ -103,8 +108,7 @@ if not cur.fetchone():
 
 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_metadata'")
 if not cur.fetchone():
-    cur.execute('CREATE TABLE file_metadata (file_name TEXT PRIMARY KEY, size INTEGER, type INTEGER)')
-    cur.execute('CREATE INDEX file_metadata_file_name ON file_metadata(file_name)')
+    cur.execute('CREATE TABLE file_metadata (file_name TEXT PRIMARY KEY, size INTEGER, mime_type TEXT, mime_detail TEXT, stat_type INTEGER)')
 
 
 # Create the hashes table if it doesn't exist already
@@ -115,7 +119,7 @@ if not cur.fetchone():
 
 
 scan_dir = os.path.abspath('.')
-print('Collecting MD5 sums for files in %s' % scan_dir)
+print('Collecting Metadata for files in %s' % scan_dir)
 
 exclude = {'dev', 'run', 'sys', 'proc', 'btrfs', 'tmp'}
 
@@ -123,11 +127,11 @@ for root, dirs, files in os.walk(scan_dir, followlinks=False, topdown=True):
     dirs[:] = [d for d in dirs if d not in exclude]
     for directory_name in dirs:
         directory_name = os.path.join(root, directory_name)
-        file_hash = md5sum(directory_name).hexdigest()
+        file_hash = analyze(directory_name).hexdigest()
         cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (directory_name, file_hash))
     for file_name in files:
         file_name = os.path.join(root, file_name)
-        file_hash = md5sum(file_name).hexdigest()
+        file_hash = analyze(file_name).hexdigest()
         cur.execute('INSERT OR REPLACE INTO hashes (file_name, md5_sum) VALUES (?, ?)', (file_name, file_hash))
 
 
