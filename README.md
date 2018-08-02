@@ -13,23 +13,15 @@ make
 
 ## Running it
 ```
-python fileorganize.py
+python fileOrganize
 ```
-It'll create a SQLite3 database in the current directory, and populate
-it with filenames and their corresponding hashes.
+It'll create a SQLite3 database in `$HOME/.local/share/fileOrganize, and populate
+it with filenames, their corresponding hashes, and some metadata.
 
 See the results with something like
 ```sql
-sqlite3 example.db 'select top 25 * from hashes'
+sqlite3 $HOME/.local/share/fileOrganize/fileOrganize.db 'select * from hashes limit 25'
 ```
-or
-```sql
-sqlite3 example.db 'select * from hashes limit 25'
-```
-
-
-Files > 10,000,000 bytes will show a progress indicator as their
-hash is being calculated.
 
 ## Next steps
 
@@ -80,4 +72,4 @@ since that's how we'll be hiding files during orginization
 
 Libraries
 ---------
-[progressbar][https://github.com/niltonvolpato/python-progressbar]
+[Progressive][https://github.com/hfaran/progressive]
